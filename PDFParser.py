@@ -1,6 +1,7 @@
 import os
 import re
 import zlib
+import base64
 
 __author__ = 'byeongal'
 __version__ = 'alpha'
@@ -23,8 +24,7 @@ class PDFParser:
                 with open(name, 'rb') as f:
                     data = f.read()
             except IOError as excp:
-                exception_msg = f'{excp}'
-                raise Exception(f'Unable to access file \'{name}\' : {exception_msg}')
+                raise Exception(f'Unable to access file \'{name}\' : {excp}')
         result = PDFParser.re_pdfheader.match(data)
         if result is None:
             raise PDFFormatError('PDFHeader does not exist.')
@@ -55,9 +55,11 @@ class PDFFormatError(Exception):
         return repr(self.value)
 
 class ObjectStructure:
-    re_filter = re.compile(rb'/Filter\s+/(\w+)', re.IGNORECASE)
+    re_filter = re.compile(rb'/Filter\s+\/(\w+)', re.IGNORECASE)
+    re_length = re.compile(rb'/Length\s+\d+', re.IGNORECASE)
     re_stream = re.compile(rb'stream\s*[\s\S]*?\s*endstream', re.IGNORECASE)
-    re_reference = re.compile(rb'\d+\s+\d+\s+R')
+    re_reference = re.compile(rb'\d+\s+\d+\s+R', re.IGNORECASE)
+
     def __init__(self, object_data):
         self.object_data = object_data
         self.__parse__()
@@ -70,18 +72,26 @@ class ObjectStructure:
             self.reference_id_list.append(int(object_id.decode()))
         filter = ObjectStructure.re_filter.search(self.object_data)
         if filter is not None:
+            self.length = int(ObjectStructure.re_length.search(self.object_data).group().split()[-1].decode())
             encoding_type = filter.groups()[0].decode().lower()
             stream = ObjectStructure.re_stream.search(self.object_data).group()[6:-9]
             stream = stream.strip()
             if encoding_type == 'flatedecode':
                 try:
                     stream = zlib.decompress(stream)
+                    stream = stream.decode()
                 except zlib.error:
                     pass
             elif encoding_type == 'asciihexdecode':
-                pass
+                try:
+                    stream = stream.decode()
+                except Exception as excp:
+                    raise Exception(f'ASCIIHex Decoding Error : {excp}')
             elif encoding_type == 'ascii85decode':
-                pass
+                try:
+                    stream = base64.a85decode(stream)
+                except Exception as excp:
+                    raise Exception(f'ASCII85 Decoding Error : {excp}')
             elif encoding_type == 'lzwdecode':
                 pass
             elif encoding_type == 'runlengthdecode':
@@ -93,5 +103,6 @@ class ObjectStructure:
         ret['ObjectID'] = self.object_id
         ret['Referencing'] = self.reference_id_list
         if hasattr(self, 'stream'):
+            ret['Length'] = self.length
             ret['Stream'] = self.stream
         return ret
